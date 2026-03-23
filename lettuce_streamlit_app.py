@@ -26,7 +26,7 @@ st.set_page_config(
 # =========================
 # 기본 상수
 # =========================
-SHEET_URL_DEFAULT = "https://docs.google.com/spreadsheets/d/1KG-w1Dq0Ifklk7LNp4PYIbCz1F6nrNVFvlJ6pRS_FCs/edit?usp=sharing"
+SHEET_URL_DEFAULT = "https://drive.google.com/file/d/1LQz5Gb_vHji8SKjaJ5hw1ZJQ3z9vUj0r/view?usp=sharing"
 DB_WORKSHEET_NAME = "DB_배치데이터"
 LOG_WORKSHEET_NAME = "예측결과_log"
 
