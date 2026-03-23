@@ -2,7 +2,7 @@ import re
 import json
 from datetime import date, timedelta
 from io import StringIO
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -113,6 +113,11 @@ def extract_sheet_id(sheet_url: str) -> str:
     if not match:
         raise ValueError("Google Sheets 링크에서 sheet id를 찾을 수 없습니다.")
     return match.group(1)
+
+
+def extract_gid(sheet_url: str) -> Optional[str]:
+    match = re.search(r"[?&#]gid=([0-9]+)", sheet_url)
+    return match.group(1) if match else None
 
 
 def empty_db() -> pd.DataFrame:
@@ -236,8 +241,21 @@ def day_sum(df: pd.DataFrame, target_date: date) -> Tuple[int, float, Optional[i
     )
 
 
-def make_public_csv_url(sheet_id: str, gid: str = "0") -> str:
-    return f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}"
+def make_public_csv_urls(sheet_id: str, worksheet_name: str, gid: Optional[str] = None) -> List[str]:
+    urls: List[str] = []
+
+    # 1) 시트 이름 기반 gviz CSV: 공유 링크(보기 권한)만 있어도 동작하는 경우가 많음
+    urls.append(
+        f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&sheet={worksheet_name}"
+    )
+
+    # 2) gid가 있으면 해당 탭 직접 export
+    if gid:
+        urls.append(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid}")
+
+    # 3) 첫 시트 fallback
+    urls.append(f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid=0")
+    return urls
 
 
 # =========================
@@ -321,12 +339,17 @@ def read_db(sheet_url: str) -> Tuple[pd.DataFrame, bool, str]:
 
     # read-only fallback
     sheet_id = extract_sheet_id(sheet_url)
-    public_csv_url = make_public_csv_url(sheet_id)
-    try:
-        df = pd.read_csv(public_csv_url)
-        return ensure_columns(df), False, "public_csv"
-    except Exception:
-        return empty_db(), False, "unavailable"
+    gid = extract_gid(sheet_url)
+    errors = []
+    for public_csv_url in make_public_csv_urls(sheet_id, DB_WORKSHEET_NAME, gid=gid):
+        try:
+            df = pd.read_csv(public_csv_url)
+            return ensure_columns(df), False, "public_csv"
+        except Exception as exc:
+            errors.append(str(exc))
+
+    st.session_state["sheet_read_errors"] = errors
+    return empty_db(), False, "unavailable"
 
 
 def write_db(sheet_url: str, df: pd.DataFrame) -> Tuple[bool, str]:
@@ -823,7 +846,17 @@ with col_c:
     st.metric("이번 주 예측", f"{total_pk:.1f} kg")
 
 if source_mode == "unavailable":
-    st.warning("Google Sheets를 읽지 못했습니다. 링크 공개 상태 또는 service account 설정을 확인하세요.")
+    st.warning("Google Sheets를 읽지 못했습니다. 링크 공개 상태, DB 시트명(DB_배치데이터), 또는 service account 설정을 확인하세요.")
+    read_errors = st.session_state.get("sheet_read_errors", [])
+    with st.expander("연결 실패 원인 보기"):
+        st.write("아래 중 하나일 가능성이 큽니다.")
+        st.write("1) Streamlit Secrets에 서비스 계정 정보가 없음")
+        st.write("2) Google Sheet가 공개 CSV로 열리지 않음")
+        st.write("3) DB 탭 이름이 'DB_배치데이터'와 다름")
+        st.write("4) 서비스 계정 이메일이 이 스프레드시트에 편집자로 공유되지 않음")
+        if read_errors:
+            st.code("
+".join(read_errors))
 
 
 # =========================
