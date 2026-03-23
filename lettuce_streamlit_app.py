@@ -26,7 +26,7 @@ st.set_page_config(
 # =========================
 # 기본 상수
 # =========================
-SHEET_URL_DEFAULT = "https://drive.google.com/file/d/1W8YOl2nZndLk8dSqWII90VcyFPcz0DGB/view?usp=sharing"
+SHEET_URL_DEFAULT = "https://docs.google.com/spreadsheets/d/1FMxN2iS0srEZD2bQ5dlQp2-JaZaXvd24W-glJpqReuo/edit?usp=sharing"
 DB_WORKSHEET_NAME = "DB_배치데이터"
 LOG_WORKSHEET_NAME = "예측결과_log"
 
@@ -329,24 +329,17 @@ def get_or_create_worksheet(spreadsheet, title: str, rows: int = 1000, cols: int
         return ws
 
 
-def read_db(sheet_url: str) -> Tuple[pd.DataFrame, bool, str]:
-    spreadsheet = open_spreadsheet(sheet_url)
-    if spreadsheet is not None:
-        ws = get_or_create_worksheet(spreadsheet, DB_WORKSHEET_NAME)
-        values = ws.get_all_records()
-        df = pd.DataFrame(values)
-        return ensure_columns(df), True, "service_account"
-
-    # read-only fallback
+def read_db(sheet_url: str, worksheet_name: str, gid_override: Optional[str] = None) -> Tuple[pd.DataFrame, bool, str]:
+    # 읽기 전용 모드: 공개된 Google Sheet를 CSV로 불러와 화면에 표시
     sheet_id = extract_sheet_id(sheet_url)
-    gid = extract_gid(sheet_url)
+    gid = gid_override or extract_gid(sheet_url)
     errors = []
-    for public_csv_url in make_public_csv_urls(sheet_id, DB_WORKSHEET_NAME, gid=gid):
+    for public_csv_url in make_public_csv_urls(sheet_id, worksheet_name, gid=gid):
         try:
             df = pd.read_csv(public_csv_url)
             return ensure_columns(df), False, "public_csv"
         except Exception as exc:
-            errors.append(str(exc))
+            errors.append(f"{public_csv_url}\n{exc}")
 
     st.session_state["sheet_read_errors"] = errors
     return empty_db(), False, "unavailable"
@@ -796,21 +789,19 @@ with st.sidebar:
     st.write(f"- D+4: {dash_dates[2]}")
     st.write(f"- 수확률: {100-loss_rate_pct}%")
 
+    worksheet_name = st.text_input("시트 탭 이름", value=DB_WORKSHEET_NAME)
+    gid_input = st.text_input("gid (선택)", value=extract_gid(sheet_url) or "")
+
     st.markdown("---")
-    info = get_service_account_info()
-    if info:
-        st.markdown("<span class='status-ok'>쓰기 가능</span>", unsafe_allow_html=True)
-        st.caption(f"service account: {info.get('client_email', '')}")
-    else:
-        st.markdown("<span class='status-warn'>읽기 전용 / 미연결</span>", unsafe_allow_html=True)
-        st.caption("st.secrets 미설정 시 public CSV 읽기만 시도합니다.")
+    st.markdown("<span class='status-ok'>읽기 전용</span>", unsafe_allow_html=True)
+    st.caption("서비스 계정 없이 공개된 Google Sheet 내용을 화면에 표시합니다.")
 
 
 # =========================
 # 데이터 로드
 # =========================
 try:
-    raw_df, is_writable, source_mode = read_db(sheet_url)
+    raw_df, is_writable, source_mode = read_db(sheet_url, worksheet_name=worksheet_name, gid_override=(gid_input.strip() or None))
 except Exception as exc:
     st.error(f"Google Sheets 로드 실패: {exc}")
     st.stop()
@@ -832,7 +823,6 @@ total_pp = int(target_df["predicted_plants"].sum(skipna=True)) if not target_df.
 total_pk = round(float(target_df["predicted_kg"].sum(skipna=True)), 1) if not target_df.empty else 0.0
 
 mode_label = {
-    "service_account": "Google Sheets API (읽기/쓰기)",
     "public_csv": "공개 CSV (읽기 전용)",
     "unavailable": "연결 실패",
 }.get(source_mode, source_mode)
@@ -846,14 +836,14 @@ with col_c:
     st.metric("이번 주 예측", f"{total_pk:.1f} kg")
 
 if source_mode == "unavailable":
-    st.warning("Google Sheets를 읽지 못했습니다. 링크 공개 상태, DB 시트명(DB_배치데이터), 또는 service account 설정을 확인하세요.")
+    st.warning("Google Sheets를 읽지 못했습니다. 링크 공개 상태, 시트 탭 이름, 또는 gid를 확인하세요.")
     read_errors = st.session_state.get("sheet_read_errors", [])
     with st.expander("연결 실패 원인 보기"):
         st.write("아래 중 하나일 가능성이 큽니다.")
-        st.write("1) Streamlit Secrets에 서비스 계정 정보가 없음")
-        st.write("2) Google Sheet가 공개 CSV로 열리지 않음")
-        st.write("3) DB 탭 이름이 'DB_배치데이터'와 다름")
-        st.write("4) 서비스 계정 이메일이 이 스프레드시트에 편집자로 공유되지 않음")
+        st.write("1) Google Sheet가 공개 CSV로 열리지 않음")
+        st.write("2) 시트 탭 이름이 실제와 다름")
+        st.write("3) 링크의 gid 또는 입력한 gid가 실제 탭과 다름")
+        st.write("4) 구글 시트가 웹에서 볼 수 있게 공개되지 않음")
         if read_errors:
             st.code("\n".join(read_errors))
 
@@ -885,9 +875,8 @@ with tab1:
                 mime="text/csv",
             )
         with c2:
-            if st.button("현재 D+3~4 결과를 예측결과_log 시트에 저장", use_container_width=True, disabled=not is_writable):
-                ok, msg = append_prediction_log(sheet_url, prediction_date, target_df)
-                (st.success if ok else st.error)(msg)
+            st.button("현재 D+3~4 결과를 예측결과_log 시트에 저장", use_container_width=True, disabled=True)
+            st.caption("읽기 전용 모드에서는 시트 저장을 하지 않습니다.")
 
 
 with tab2:
@@ -899,6 +888,7 @@ with tab2:
 
 with tab3:
     st.markdown("### 현재 DB")
+    st.caption("원본 Google Sheet를 읽기 전용으로 표시합니다.")
     view_df = pred_df.copy()
     view_df["actual_weight_per_plant_g"] = view_df.apply(compute_actual_weight_g, axis=1)
     show_cols = [
@@ -910,6 +900,7 @@ with tab3:
 
     st.markdown("---")
     st.markdown("### 배치 추가 / 업데이트")
+    st.info("읽기 전용 모드입니다. Google Sheet에서 직접 수정해 주세요.")
     with st.form("add_batch_form"):
         c1, c2, c3, c4 = st.columns(4)
         batch_id = c1.text_input("batch_id")
@@ -928,7 +919,7 @@ with tab3:
         weight_per_plant_g = c10.number_input("주당 예상 무게(g)", min_value=0, value=int(default_weight_g), step=1)
         loss_rate_input_pct = c11.number_input("배치별 로스율(%)", min_value=0, max_value=100, value=int(loss_rate_pct), step=1)
         note = st.text_input("비고")
-        submitted = st.form_submit_button("배치 저장", use_container_width=True, disabled=not is_writable)
+        submitted = st.form_submit_button("배치 저장", use_container_width=True, disabled=True)
 
     if submitted:
         if not batch_id.strip():
@@ -964,7 +955,7 @@ with tab3:
     st.markdown("### 배치 삭제")
     delete_candidates = pred_df["batch_id"].dropna().astype(str).tolist()
     delete_ids = st.multiselect("삭제할 batch_id", options=delete_candidates)
-    if st.button("선택 배치 삭제", disabled=(not is_writable or not delete_ids)):
+    if st.button("선택 배치 삭제", disabled=True):
         save_df = ensure_columns(raw_df.copy())
         save_df = save_df[~save_df["batch_id"].astype(str).isin(delete_ids)].copy()
         ok, msg = write_db(sheet_url, save_df)
@@ -977,6 +968,7 @@ with tab3:
 
 with tab4:
     st.markdown("### 실적 입력")
+    st.info("읽기 전용 모드입니다. 실적은 Google Sheet에서 직접 입력해 주세요.")
     if pred_df.empty:
         st.warning("실적을 입력할 DB가 없습니다.")
     else:
