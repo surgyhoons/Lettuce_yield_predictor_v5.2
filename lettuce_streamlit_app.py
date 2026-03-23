@@ -165,18 +165,34 @@ def normalize_db(df: pd.DataFrame, default_weight_g: float, default_loss_rate: f
 def calc_predictions(df: pd.DataFrame) -> pd.DataFrame:
     d = df.copy()
 
-    def _calc_row(row: pd.Series) -> pd.Series:
-        tg = row["tray_or_gutter"]
-        if pd.isna(tg):
-            return pd.Series({"predicted_plants": np.nan, "predicted_kg": np.nan})
-        plants_per_unit = PLANTS_PER_TRAY if row["bed_type"] == "fixed" else PLANTS_PER_GUTTER
-        predicted_plants = round(float(tg) * plants_per_unit * (1 - float(row["loss_rate"])))
-        predicted_kg = round(predicted_plants * float(row["weight_per_plant_g"]) / 1000, 2)
-        return pd.Series({"predicted_plants": predicted_plants, "predicted_kg": predicted_kg})
+    # 빈 DataFrame 에서 row-wise apply 결과를 바로 2개 컬럼에 대입하면
+    # pandas 버전에 따라 "Columns must be same length as key" 에러가 날 수 있어
+    # 벡터화 계산으로 고정한다.
+    d["predicted_plants"] = np.nan
+    d["predicted_kg"] = np.nan
 
-    d[["predicted_plants", "predicted_kg"]] = d.apply(_calc_row, axis=1)
+    if d.empty:
+        d["total_days"] = pd.Series(dtype="float64")
+        d["status"] = pd.Series(dtype="object")
+        return d
+
+    bed_type = d["bed_type"].astype(str).str.lower().fillna("")
+    plants_per_unit = np.where(bed_type.eq("fixed"), PLANTS_PER_TRAY, PLANTS_PER_GUTTER)
+
+    valid_mask = d["tray_or_gutter"].notna() & d["loss_rate"].notna() & d["weight_per_plant_g"].notna()
+    predicted_plants = np.round(
+        d.loc[valid_mask, "tray_or_gutter"].astype(float)
+        * plants_per_unit[valid_mask]
+        * (1 - d.loc[valid_mask, "loss_rate"].astype(float))
+    )
+    d.loc[valid_mask, "predicted_plants"] = predicted_plants
+    d.loc[valid_mask, "predicted_kg"] = np.round(
+        predicted_plants * d.loc[valid_mask, "weight_per_plant_g"].astype(float) / 1000,
+        2,
+    )
+
     d["total_days"] = (d["harvest_date"] - d["sow_date"]).dt.days
-    d["status"] = d["predicted_plants"].apply(lambda x: "규칙 기반" if pd.notna(x) else "N/A")
+    d["status"] = np.where(d["predicted_plants"].notna(), "규칙 기반", "N/A")
     return d
 
 
