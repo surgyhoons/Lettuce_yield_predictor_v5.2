@@ -855,8 +855,7 @@ if source_mode == "unavailable":
         st.write("3) DB 탭 이름이 'DB_배치데이터'와 다름")
         st.write("4) 서비스 계정 이메일이 이 스프레드시트에 편집자로 공유되지 않음")
         if read_errors:
-            st.code("
-".join(read_errors))
+            st.code("\n".join(read_errors))
 
 
 # =========================
