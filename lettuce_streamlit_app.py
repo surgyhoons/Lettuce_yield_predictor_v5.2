@@ -26,9 +26,20 @@ st.set_page_config(
 # =========================
 # 기본 상수
 # =========================
-SHEET_URL_DEFAULT = "https://drive.google.com/file/d/1LQz5Gb_vHji8SKjaJ5hw1ZJQ3z9vUj0r/view?usp=sharing"
-DB_WORKSHEET_NAME = "DB_배치데이터"
-LOG_WORKSHEET_NAME = "예측결과_log"
+# ============================================================
+# 1. 구글 시트 연결 설정 (Secrets 연동)
+# ============================================================
+# 시트 주소: https://docs.google.com/spreadsheets/d/1FMxN2iS0srEZD2bQ5dlQp2-JaZaXvd24W-glJpqReuo/edit?usp=sharing
+conn = st.connection("gsheets", type=GSheetsConnection)
+
+def load_db():
+    try:
+        # 캐시 없이 실시간 데이터를 읽어옵니다.
+        df = conn.read(ttl="0")
+        return df
+    except Exception as e:
+        st.error(f"데이터 로드 실패: {e}")
+        return pd.DataFrame()
 
 DB_COLS = [
     "batch_id",
